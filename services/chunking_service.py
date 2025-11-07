@@ -14,12 +14,24 @@ class ChunkingService:
         self.chunk_overlap = settings.CHUNK_OVERLAP
 
     def chunk_document(self, document: Document) -> List[Chunk]:
-
+        from core.logging_config import get_logger
+        logger = get_logger("chunking")
+        
         content = str(document.content)
+        logger.debug(f"Chunking document {document.id}: {len(content)} characters")
 
-        self.db.query(Chunk).filter(Chunk.document_id == document.id).delete()
+        deleted_count = self.db.query(Chunk).filter(Chunk.document_id == document.id).delete()
+        if deleted_count > 0:
+            logger.debug(f"Deleted {deleted_count} existing chunks")
+        self.db.commit()
 
+        logger.debug(f"Creating chunks with size={self.chunk_size}, overlap={self.chunk_overlap}")
         chunks_data = self._create_chunks_with_overlap(content)
+        logger.info(f"Created {len(chunks_data)} chunks from document {document.id}")
+
+        if not chunks_data:
+            logger.warning(f"No chunks created for document {document.id}")
+            return []
 
         chunks = []
         previous_chunk = None
@@ -45,6 +57,7 @@ class ChunkingService:
             previous_chunk = chunk
 
         self.db.commit()
+        logger.debug(f"Saved {len(chunks)} chunks to database")
 
         setattr(document, "is_processed", False)
         setattr(document, "processing_status", "chunked")
@@ -53,7 +66,9 @@ class ChunkingService:
         return chunks
 
     def _create_chunks_with_overlap(self, text: str) -> List[str]:
-
+        """
+        Create chunks with overlap, trying to break at paragraph or line boundaries.
+        """
         chunks = []
         start = 0
         text_length = len(text)
@@ -70,7 +85,7 @@ class ChunkingService:
                 if paragraph_break != -1 and paragraph_break > start:
                     end = paragraph_break + 2
                 else:
-                    line_break = text.find('\n', end - 50, end + 50)
+                    line_break = text.find('\n', max(end - 50, start), min(end + 50, text_length))
                     if line_break != -1 and line_break > start:
                         end = line_break + 1
             else:
@@ -81,10 +96,15 @@ class ChunkingService:
             if chunk_text:
                 chunks.append(chunk_text)
 
-            start = end - self.chunk_overlap
-
-            if start <= end - self.chunk_size:
-                start = end - self.chunk_overlap
+            new_start = end - self.chunk_overlap
+            
+            if new_start <= start:
+                new_start = start + 1
+            
+            if new_start >= text_length:
+                break
+                
+            start = new_start
 
         return chunks
 

@@ -15,9 +15,20 @@ class EmbeddingService:
 
     def __init__(self, db: Session):
         self.db = db
-        self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        if not settings.OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY not configured. Please set it in .env file.")
+        
+        self.client = OpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            timeout=60.0
+        )
         self.model = settings.EMBEDDING_MODEL
-        self.encoding = tiktoken.encoding_for_model("text-embedding-ada-003")
+        
+        try:
+            self.encoding = tiktoken.encoding_for_model(self.model)
+        except:
+            self.encoding = tiktoken.encoding_for_model("text-embedding-ada-003")
 
     def generate_embeddings_for_document(
         self,
@@ -41,8 +52,15 @@ class EmbeddingService:
         total_tokens = 0
         chunks_processed = 0
         start_time = time.time()
+        total_batches = (len(chunks) + batch_size - 1) // batch_size
+
+        from core.logging_config import get_logger
+        logger = get_logger("embedding")
+        
+        logger.info(f"Processing {len(chunks)} chunks in {total_batches} batch(es)...")
 
         for i in range(0, len(chunks), batch_size):
+            batch_num = (i // batch_size) + 1
             batch = chunks[i:i + batch_size]
 
             texts = [str(chunk.content) for chunk in batch]
@@ -51,7 +69,9 @@ class EmbeddingService:
             total_tokens += batch_tokens
 
             try:
+                logger.info(f"  Batch {batch_num}/{total_batches}: Generating embeddings for {len(batch)} chunks ({batch_tokens} tokens)...")
                 embeddings = self._generate_embeddings_batch(texts)
+                logger.info(f"  Batch {batch_num}/{total_batches}: ✓ Embeddings received from OpenAI")
 
                 for chunk, embedding in zip(batch, embeddings):
                     setattr(chunk, "embedding", json.dumps(embedding))
@@ -59,13 +79,16 @@ class EmbeddingService:
                     chunks_processed += 1
 
                 self.db.commit()
+                logger.info(f"  Batch {batch_num}/{total_batches}: ✓ Saved to database ({chunks_processed}/{len(chunks)} chunks processed)")
 
                 del embeddings
                 gc.collect()
 
             except Exception as e:
                 self.db.rollback()
-                print(f"Error processing batch: {str(e)}")
+                logger.error(f"  Batch {batch_num}/{total_batches}: ✗ Error: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
                 continue
 
         document = self.db.query(Document).filter(Document.id == document_id).first()
@@ -93,19 +116,34 @@ class EmbeddingService:
 
         for attempt in range(max_retries):
             try:
+                from core.logging_config import get_logger
+                logger = get_logger("embedding")
+                
+                if attempt > 0:
+                    logger.info(f"    Retry attempt {attempt + 1}/{max_retries}...")
+                
+                logger.debug(f"    Calling OpenAI API with model: {self.model}")
                 response = self.client.embeddings.create(
                     model=self.model,
                     input=texts
                 )
 
                 embeddings = [item.embedding for item in response.data]
+                logger.debug(f"    ✓ Received {len(embeddings)} embeddings from OpenAI")
                 return embeddings
 
             except Exception as e:
+                from core.logging_config import get_logger
+                logger = get_logger("embedding")
+                logger.warning(f"    API call failed: {str(e)}")
+                
                 if attempt < max_retries - 1:
-                    time.sleep(retry_delay * (2 ** attempt))
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"    Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
                     continue
                 else:
+                    logger.error(f"    All retries exhausted. Raising exception.")
                     raise e
 
         raise Exception("Failed to generate embeddings after all retries")

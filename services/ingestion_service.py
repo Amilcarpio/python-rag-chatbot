@@ -47,7 +47,7 @@ class IngestionService:
             elif file_type == 'md':
                 content, metadata = self._extract_markdown(file_content)
             else:
-                raise ValueError(f"Tipo de arquivo não suportado: {file_type}")
+                raise ValueError(f"File type not supported: {file_type}")
 
             preview = content[:500] if len(content) > 500 else content
 
@@ -76,12 +76,13 @@ class IngestionService:
         except Exception as e:
             if file_path.exists():
                 file_path.unlink()
-            raise ValueError(f"Erro ao processar arquivo: {str(e)}")
+            raise ValueError(f"Error processing file: {str(e)}")
 
     def ingest_document_sync(
         self,
         file_content: bytes,
-        original_filename: str
+        original_filename: str,
+        save_to_disk: bool = False
     ) -> Document:
         file_ext = Path(original_filename).suffix.lower()
         if file_ext not in settings.ALLOWED_EXTENSIONS:
@@ -91,13 +92,18 @@ class IngestionService:
         if file_size > settings.MAX_FILE_SIZE:
             raise ValueError(f"File too large. Maximum: {settings.MAX_FILE_SIZE} bytes")
 
-        unique_filename = f"{uuid.uuid4()}{file_ext}"
-        file_path = self.upload_dir / unique_filename
-
-        with open(file_path, 'wb') as f:
-            f.write(file_content)
-
         file_type = file_ext.lstrip('.')
+
+        if save_to_disk:
+            unique_filename = f"{uuid.uuid4()}{file_ext}"
+            file_path = self.upload_dir / unique_filename
+            with open(file_path, 'wb') as f:
+                f.write(file_content)
+            stored_filename = unique_filename
+            stored_file_path = str(file_path)
+        else:
+            stored_filename = original_filename
+            stored_file_path = str(Path("data") / original_filename)
 
         try:
             if file_type == 'pdf':
@@ -109,16 +115,16 @@ class IngestionService:
             elif file_type == 'md':
                 content, metadata = self._extract_markdown(file_content)
             else:
-                raise ValueError(f"Tipo de arquivo não suportado: {file_type}")
+                raise ValueError(f"File type not supported: {file_type}")
 
             preview = content[:500] if len(content) > 500 else content
 
             document = Document(
-                filename=unique_filename,
+                filename=stored_filename,
                 original_filename=original_filename,
                 file_type=file_type,
                 file_size=file_size,
-                file_path=str(file_path),
+                file_path=stored_file_path,
                 content=content,
                 content_preview=preview,
                 num_pages=metadata.get('num_pages'),
@@ -136,9 +142,9 @@ class IngestionService:
             return document
 
         except Exception as e:
-            if file_path.exists():
+            if save_to_disk and file_path.exists():
                 file_path.unlink()
-            raise ValueError(f"Erro ao processar arquivo: {str(e)}")
+            raise ValueError(f"Error processing file: {str(e)}")
 
     def _extract_pdf(self, file_content: bytes) -> tuple[str, Dict]:
 
@@ -190,7 +196,7 @@ class IngestionService:
                 continue
 
         if content is None:
-            raise ValueError("Não foi possível decodificar o arquivo TXT")
+            raise ValueError("Could not decode TXT file")
 
         metadata = {
             'num_pages': None

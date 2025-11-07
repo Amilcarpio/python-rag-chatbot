@@ -18,6 +18,44 @@ class LLMService:
             self.encoding = tiktoken.encoding_for_model(self.model)
         except:
             self.encoding = tiktoken.get_encoding("cl100k_base")
+    
+    def _is_gpt5_model(self, model: Optional[str] = None) -> bool:
+        """
+        Check if the model is a GPT-5 model that requires max_completion_tokens
+        and only supports temperature=1
+        """
+        model_name = (model or self.model).lower()
+        return "gpt-5" in model_name
+    
+    def _get_completion_params(
+        self,
+        token_limit: int,
+        temperature: Optional[float] = None,
+        model: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get the appropriate completion parameters based on the model type.
+        
+        GPT-5 models require:
+        - max_completion_tokens instead of max_tokens
+        - temperature=1 (fixed, cannot be changed)
+        
+        Other models (GPT-4.1, GPT-3.5, etc.) use:
+        - max_tokens
+        - temperature configurable
+        """
+        is_gpt5 = self._is_gpt5_model(model)
+        
+        params = {}
+        
+        if is_gpt5:
+            params["temperature"] = 1.0
+            params["max_completion_tokens"] = token_limit
+        else:
+            params["max_tokens"] = token_limit
+            params["temperature"] = temperature or self.temperature
+        
+        return params
 
     def generate_response(
         self,
@@ -30,16 +68,37 @@ class LLMService:
 
         try:
             typed_messages = cast(List[ChatCompletionMessageParam], messages)
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=typed_messages,
-                temperature=temperature or self.temperature,
-                max_tokens=max_tokens or self.max_tokens,
+            token_limit = max_tokens or self.max_tokens
+            
+            create_params = {
+                "model": self.model,
+                "messages": typed_messages,
+            }
+
+            completion_params = self._get_completion_params(
+                token_limit=token_limit,
+                temperature=temperature,
+                model=self.model
             )
+            create_params.update(completion_params)
+            
+            response = self.client.chat.completions.create(**create_params)
 
             latency = time.time() - start_time
 
-            answer = response.choices[0].message.content or ""
+            choice = response.choices[0]
+            finish_reason = choice.finish_reason
+            message = choice.message
+
+            answer = message.content if message.content is not None else ""
+
+            if not answer and response.usage and response.usage.completion_tokens > 0:
+                from core.logging_config import get_logger
+                logger = get_logger("llm_service")
+                logger.warning(
+                    f"Empty answer but {response.usage.completion_tokens} completion tokens generated. "
+                    f"Finish reason: {finish_reason}, Model: {self.model}"
+                )
 
             usage = {
                 'prompt_tokens': response.usage.prompt_tokens if response.usage else 0,
@@ -63,7 +122,7 @@ class LLMService:
 
         except Exception as e:
             return {
-                'answer': f"Erro ao gerar resposta: {str(e)}",
+                'answer': f"Error generating response: {str(e)}",
                 'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0},
                 'cost': 0.0,
                 'latency': time.time() - start_time,
@@ -80,13 +139,22 @@ class LLMService:
 
         try:
             typed_messages = cast(List[ChatCompletionMessageParam], messages)
-            stream = self.client.chat.completions.create(
-                model=self.model,
-                messages=typed_messages,
-                temperature=temperature or self.temperature,
-                max_tokens=max_tokens or self.max_tokens,
-                stream=True
+            token_limit = max_tokens or self.max_tokens
+            
+            create_params = {
+                "model": self.model,
+                "messages": typed_messages,
+                "stream": True
+            }
+            
+            completion_params = self._get_completion_params(
+                token_limit=token_limit,
+                temperature=temperature,
+                model=self.model
             )
+            create_params.update(completion_params)
+            
+            stream = self.client.chat.completions.create(**create_params)
 
             for chunk in stream:
                 if chunk.choices[0].delta.content:
@@ -129,11 +197,19 @@ class LLMService:
     def validate_model(self) -> bool:
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": "test"}],
-                max_tokens=5
+            create_params = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": "test"}],
+            }
+
+            completion_params = self._get_completion_params(
+                token_limit=5,
+                temperature=None,
+                model=self.model
             )
+            create_params.update(completion_params)
+            
+            response = self.client.chat.completions.create(**create_params)
             return True
         except Exception as e:
             print(f"Erro ao validar modelo: {e}")

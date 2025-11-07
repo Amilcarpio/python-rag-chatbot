@@ -1,4 +1,4 @@
-"""Middleware para logging e métricas"""
+"""Middleware for logging and metrics"""
 
 from .logging_middleware import (
     RequestLoggingMiddleware,

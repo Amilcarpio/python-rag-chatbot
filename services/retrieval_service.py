@@ -1,4 +1,4 @@
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 
 from database.vector_store import VectorStore
@@ -18,8 +18,7 @@ class RetrievalService:
         self,
         query: str,
         top_k: Optional[int] = None,
-        min_similarity: Optional[float] = None,
-        include_context: bool = True
+        min_similarity: Optional[float] = None
     ) -> List[Dict]:
 
         if top_k is None:
@@ -99,39 +98,3 @@ class RetrievalService:
             'min_similarity': min(r['similarity'] for r in results),
             'max_similarity': max(r['similarity'] for r in results)
         }
-
-    def format_context_for_llm(self, results: List[Dict]) -> str:
-
-        if not results:
-            return "Nenhum contexto relevante encontrado."
-
-        context_parts = []
-        for i, result in enumerate(results, 1):
-            doc = result['document']
-            context = result['full_context']
-
-            part = f"""
-Fonte {i}: {doc.filename}
-Relevância: {result['similarity']}
-Conteúdo:
-{context}
-"""
-            context_parts.append(part)
-
-        return "\n---\n".join(context_parts)
-
-    def get_sources_metadata(self, results: List[Dict]) -> List[Dict]:
-
-        sources = []
-        for i, result in enumerate(results, 1):
-            doc = result['document']
-            sources.append({
-                'source_id': i,
-                'filename': doc.filename,
-                'file_type': doc.file_type,
-                'language': doc.language,
-                'similarity': result['similarity'],
-                'chunk_index': result['chunk_index']
-            })
-
-        return sources

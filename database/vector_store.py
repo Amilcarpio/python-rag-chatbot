@@ -10,35 +10,55 @@ class VectorStore:
         self.db = db
 
     def sync_embeddings_to_vector(self, batch_size: int = 100) -> Dict[str, int]:
-        chunks = self.db.query(Chunk).filter(
-            Chunk.embedding.isnot(None),
-            Chunk.embedding_vector.is_(None)
-        ).limit(batch_size).all()
+        query = text("""
+            SELECT id, embedding
+            FROM chunks
+            WHERE embedding IS NOT NULL
+                AND embedding_vector IS NULL
+            LIMIT :limit
+        """)
+        
+        results = self.db.execute(query, {"limit": batch_size}).fetchall()
 
-        if not chunks:
-            return {'synced': 0, 'total_pending': 0}
+        if not results:
+            pending_query = text("""
+                SELECT COUNT(*)
+                FROM chunks
+                WHERE embedding IS NOT NULL
+                    AND embedding_vector IS NULL
+            """)
+            pending = self.db.execute(pending_query).scalar() or 0
+            return {'synced': 0, 'total_pending': pending}
 
         synced = 0
-        for chunk in chunks:
+        for row in results:
             try:
-                embedding_list = json.loads(str(chunk.embedding))
+                chunk_id = row.id
+                embedding_json = row.embedding
+                
+                embedding_list = json.loads(str(embedding_json))
                 embedding_str = '[' + ','.join(map(str, embedding_list)) + ']'
 
                 self.db.execute(
-                    text("UPDATE chunks SET embedding_vector = :vec WHERE id = :id"),
-                    {"vec": embedding_str, "id": chunk.id}
+                    text("UPDATE chunks SET embedding_vector = CAST(:vec AS vector) WHERE id = :id"),
+                    {"vec": embedding_str, "id": chunk_id}
                 )
                 synced += 1
             except Exception as e:
-                print(f"Error syncing chunk {chunk.id}: {e}")
+                from core.logging_config import get_logger
+                logger = get_logger("vector_store")
+                logger.error(f"Error syncing chunk {chunk_id}: {e}")
                 continue
 
         self.db.commit()
 
-        pending = self.db.query(Chunk).filter(
-            Chunk.embedding.isnot(None),
-            Chunk.embedding_vector.is_(None)
-        ).count()
+        pending_query = text("""
+            SELECT COUNT(*)
+            FROM chunks
+            WHERE embedding IS NOT NULL
+                AND embedding_vector IS NULL
+        """)
+        pending = self.db.execute(pending_query).scalar() or 0
 
         return {'synced': synced, 'total_pending': pending}
 
@@ -86,15 +106,19 @@ class VectorStore:
     def get_stats(self) -> Dict:
         total_chunks = self.db.query(Chunk).count()
 
-        chunks_with_vector = self.db.query(Chunk).filter(
-            Chunk.embedding_vector.isnot(None)
-        ).count()
+        chunks_with_vector_query = text("""
+            SELECT COUNT(*)
+            FROM chunks
+            WHERE embedding_vector IS NOT NULL
+        """)
+        chunks_with_vector = self.db.execute(chunks_with_vector_query).scalar() or 0
 
-        docs_with_embeddings = self.db.query(
-            func.count(func.distinct(Chunk.document_id))
-        ).filter(
-            Chunk.embedding_vector.isnot(None)
-        ).scalar()
+        docs_with_embeddings_query = text("""
+            SELECT COUNT(DISTINCT document_id)
+            FROM chunks
+            WHERE embedding_vector IS NOT NULL
+        """)
+        docs_with_embeddings = self.db.execute(docs_with_embeddings_query).scalar() or 0
 
         return {
             'total_chunks': total_chunks,
@@ -104,5 +128,5 @@ class VectorStore:
                 (chunks_with_vector / total_chunks * 100) if total_chunks > 0 else 0,
                 2
             ),
-            'documents_indexed': docs_with_embeddings or 0
+            'documents_indexed': docs_with_embeddings
         }

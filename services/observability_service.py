@@ -151,7 +151,7 @@ class ObservabilityService:
         if not self.metrics_history:
             return {
                 'total_queries': 0,
-                'message': 'Nenhuma métrica registrada ainda'
+                'message': 'No metrics recorded yet'
             }
 
         metrics = self.metrics_history[-last_n:] if last_n else self.metrics_history
@@ -253,11 +253,11 @@ class ObservabilityService:
     def _get_bottleneck_recommendation(self, bottleneck: str) -> str:
 
         recommendations = {
-            'guardrails': 'Otimize regex patterns ou considere cache de validações',
-            'retrieval': 'Otimize índices pgvector ou reduza top_k',
-            'llm': 'Considere modelo mais rápido ou implemente cache de respostas'
+            'guardrails': 'Optimize regex patterns or consider validation cache',
+            'retrieval': 'Optimize pgvector indices or reduce top_k',
+            'llm': 'Consider faster model or implement response cache'
         }
-        return recommendations.get(bottleneck, 'Nenhuma recomendação específica')
+        return recommendations.get(bottleneck, 'No specific recommendation')
 
     def export_metrics(self) -> List[Dict]:
 

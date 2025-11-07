@@ -18,16 +18,13 @@ observability = ObservabilityService()
 class ChatRequest(BaseModel):
 
     question: str
-    conversation_id: str = ""
     top_k: Optional[int] = None
 
 class Source(BaseModel):
 
-    id: int
-    filename: str
-    file_type: str
+    document: str
+    excerpt: str
     similarity: float
-    chunk_index: int
 
 class Metrics(BaseModel):
 
@@ -41,8 +38,7 @@ class Metrics(BaseModel):
 class ChatResponse(BaseModel):
 
     answer: str
-    sources: List[Source]
-    conversation_id: str
+    citations: List[Source]
     metrics: Optional[Metrics] = None
 
 @router.post("/ask", response_model=ChatResponse, status_code=status.HTTP_200_OK)
@@ -68,8 +64,8 @@ async def ask_question(
 
             return ChatResponse(
                 answer=validation['message'],
-                sources=[],
-                conversation_id=request.conversation_id or "default"
+                citations=[],
+                metrics=None
             )
 
         start = time.time()
@@ -90,9 +86,9 @@ async def ask_question(
 
         if not retrieval_results:
             return ChatResponse(
-                answer="Não encontrei informações relevantes nos documentos disponíveis para responder sua pergunta. Por favor, tente reformular ou fazer outra pergunta sobre os documentos anexados.",
-                sources=[],
-                conversation_id=request.conversation_id or "default"
+                answer="I could not find relevant information in the available documents to answer your question. Please try reformulating or asking another question about the attached documents.",
+                citations=[],
+                metrics=None
             )
 
         prompt_service = PromptService()
@@ -114,16 +110,21 @@ async def ask_question(
 
         sanitized_answer = guardrails.sanitize_response(llm_response['answer'])
 
-        sources = [
-            Source(
-                id=i,
-                filename=r['document'].filename,
-                file_type=r['document'].file_type,
-                similarity=r['similarity'],
-                chunk_index=r['chunk_index']
-            )
-            for i, r in enumerate(retrieval_results, 1)
-        ]
+        seen_citations = set()
+        citations = []
+        for r in retrieval_results:
+            excerpt = r['content'][:500] + "..." if len(r['content']) > 500 else r['content']
+            citation_key = (r['document'].original_filename, excerpt[:100])
+            
+            if citation_key not in seen_citations:
+                seen_citations.add(citation_key)
+                citations.append(
+                    Source(
+                        document=r['document'].original_filename,
+                        excerpt=excerpt,
+                        similarity=r['similarity']
+                    )
+                )
 
         metrics = Metrics(
             total_latency=metrics_data.total_latency,
@@ -136,8 +137,7 @@ async def ask_question(
 
         return ChatResponse(
             answer=sanitized_answer,
-            sources=sources,
-            conversation_id=request.conversation_id or "default",
+            citations=citations,
             metrics=metrics
         )
 
@@ -148,7 +148,7 @@ async def ask_question(
 
         raise HTTPException(
             status_code=500,
-            detail=f"Erro interno ao processar pergunta: {str(e)}"
+            detail=f"Internal error processing question: {str(e)}"
         )
 
 @router.get("/metrics")
