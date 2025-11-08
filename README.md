@@ -164,7 +164,7 @@ Retorna estatísticas agregadas das consultas, incluindo total de queries, taxa 
 ### Pré-requisitos
 
 - Python 3.11 ou superior
-- PostgreSQL 14+ com extensão pgvector
+- Docker e Docker Compose (para executar o banco de dados PostgreSQL com pgvector)
 - OpenAI API key
 
 ### Instalação
@@ -199,9 +199,19 @@ Edite o arquivo `.env` com suas credenciais. As variáveis obrigatórias são:
 - `DATABASE_URL`: URL de conexão com PostgreSQL (formato: `postgresql://user:password@host:port/database`)
 - `OPENAI_API_KEY`: Chave da API OpenAI
 
-4. Configure o banco de dados:
+4. Inicie o banco de dados com Docker Compose:
 
-O sistema configura automaticamente a extensão pgvector na inicialização. Se precisar configurar manualmente:
+```bash
+docker-compose up -d
+```
+
+Este comando iniciará o PostgreSQL com a extensão pgvector em background. Para verificar se o banco está rodando:
+
+```bash
+docker-compose ps
+```
+
+O sistema configura automaticamente a extensão pgvector na inicialização da aplicação. Se precisar configurar manualmente:
 
 ```bash
 python database/setup_pgvector.py
